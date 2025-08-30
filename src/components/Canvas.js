@@ -111,7 +111,84 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
       const centerY = points[0].y + (points[1].y - points[0].y) / 2;
       context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
       context.stroke();
+    } else if (tool === 'triangle') {
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+      context.lineTo(points[1].x, points[1].y);
+      context.lineTo(points[0].x * 2 - points[1].x, points[1].y);
+      context.closePath();
+      context.stroke();
     }
+    // Paint bucket is handled separately in the floodFill function
+  };
+
+  // Flood fill algorithm for paint bucket
+  const floodFill = (x, y, fillColor) => {
+    if (!context) return;
+    
+    const imageData = context.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+    const pixels = imageData.data;
+    const stack = [{x, y}];
+    
+    // Get the color at the target position
+    const targetIndex = (Math.round(y) * canvasRef.current.width + Math.round(x)) * 4;
+    const targetColor = {
+      r: pixels[targetIndex],
+      g: pixels[targetIndex + 1],
+      b: pixels[targetIndex + 2],
+      a: pixels[targetIndex + 3]
+    };
+    
+    // Convert fill color to RGB
+    const fillRgb = hexToRgb(fillColor);
+    
+    // If target color is same as fill color, return
+    if (
+      targetColor.r === fillRgb.r &&
+      targetColor.g === fillRgb.g &&
+      targetColor.b === fillRgb.b &&
+      targetColor.a === 255
+    ) {
+      return;
+    }
+    
+    while (stack.length) {
+      const {x, y} = stack.pop();
+      const index = (Math.round(y) * canvasRef.current.width + Math.round(x)) * 4;
+      
+      // Check if pixel is within canvas and matches target color
+      if (
+        x >= 0 && x < canvasRef.current.width &&
+        y >= 0 && y < canvasRef.current.height &&
+        pixels[index] === targetColor.r &&
+        pixels[index + 1] === targetColor.g &&
+        pixels[index + 2] === targetColor.b &&
+        pixels[index + 3] === targetColor.a
+      ) {
+        // Fill the pixel
+        pixels[index] = fillRgb.r;
+        pixels[index + 1] = fillRgb.g;
+        pixels[index + 2] = fillRgb.b;
+        pixels[index + 3] = 255;
+        
+        // Add adjacent pixels to stack
+        stack.push({x: x - 1, y});
+        stack.push({x: x + 1, y});
+        stack.push({x, y: y - 1});
+        stack.push({x, y: y + 1});
+      }
+    }
+    
+    context.putImageData(imageData, 0, 0);
+  };
+
+  // Convert hex color to RGB
+  const hexToRgb = (hex) => {
+    const bigint = parseInt(hex.replace('#', ''), 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return { r, g, b };
   };
 
   // Redraw entire canvas from history
@@ -123,7 +200,17 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     
     // Redraw all history items
     historyData.forEach(data => {
-      drawOnCanvas(data, false);
+      // Only draw non-paint-bucket items to avoid infinite loop
+      if (data.tool !== 'paint-bucket') {
+        drawOnCanvas(data, false);
+      }
+    });
+    
+    // After drawing all shapes, apply paint bucket operations
+    historyData.forEach(data => {
+      if (data.tool === 'paint-bucket') {
+        floodFill(data.points[0].x, data.points[0].y, data.color);
+      }
     });
   };
 
@@ -139,13 +226,39 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
+    if (tool === 'paint-bucket') {
+      // For paint bucket, apply flood fill immediately
+      floodFill(x, y, color);
+      
+      // Create drawing data for paint bucket
+      const drawingData = {
+        tool: 'paint-bucket',
+        points: [{x, y}],
+        color,
+        brushSize
+      };
+      
+      // Add to history
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(drawingData);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+      
+      // Send to server
+      if (socket) {
+        socket.emit('drawing', drawingData);
+      }
+      
+      return;
+    }
+    
     setIsDrawing(true);
     setStartPos({ x, y });
     setCurrentPath([{ x, y }]);
   };
 
   const draw = (e) => {
-    if (!isDrawing || !context) return;
+    if (!isDrawing || !context || tool === 'paint-bucket') return;
     
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -199,11 +312,18 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
       const centerY = startPos.y + (y - startPos.y) / 2;
       context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
       context.stroke();
+    } else if (tool === 'triangle') {
+      context.beginPath();
+      context.moveTo(startPos.x, startPos.y);
+      context.lineTo(x, y);
+      context.lineTo(startPos.x * 2 - x, y);
+      context.closePath();
+      context.stroke();
     }
   };
 
   const stopDrawing = (e) => {
-    if (!isDrawing) return;
+    if (!isDrawing || tool === 'paint-bucket') return;
     
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;

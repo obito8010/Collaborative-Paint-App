@@ -3,16 +3,18 @@ import React from 'react';
 const Toolbar = ({ tool, setTool }) => {
   const tools = [
     { id: 'pencil', icon: '✏️', label: 'Pencil' },
-    { id: 'eraser', icon: '🧹', label: 'Eraser' },
+    { id: 'eraser', icon: '🧽', label: 'Eraser' },
     { id: 'line', icon: '📏', label: 'Line' },
-    { id: 'rectangle', icon: '⬜', label: 'Rectangle' },
-    { id: 'oval', icon: '⭕', label: 'Oval' },
+    { id: 'rectangle', icon: '□', label: 'Rectangle' },
+    { id: 'oval', icon: '○', label: 'Oval' },
+    { id: 'triangle', icon: '△', label: 'Triangle' },
+    { id: 'paint-bucket', icon: '🎨', label: 'Paint Bucket' },
   ];
 
   return (
     <div className="mb-6">
       <h2 className="text-lg font-semibold mb-3 text-gray-700">Tools</h2>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {tools.map(({ id, icon, label }) => (
           <button
             key={id}
