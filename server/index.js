@@ -16,9 +16,12 @@ app.use(cors());
 
 // Store drawing history for new connections
 let drawingHistory = [];
+let users = 0;
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+  users++;
+  io.emit('users-count', users);
   
   // Send current drawing history to new client
   socket.emit('drawing-history', drawingHistory);
@@ -39,6 +42,8 @@ io.on('connection', (socket) => {
   
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
+    users--;
+    io.emit('users-count', users);
   });
 });
 

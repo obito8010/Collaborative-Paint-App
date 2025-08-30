@@ -7,6 +7,7 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+  const [currentPath, setCurrentPath] = useState([]);
 
   // Initialize canvas context
   useEffect(() => {
@@ -17,8 +18,13 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     // Set canvas size
     const resizeCanvas = () => {
       const container = canvas.parentElement;
-      canvas.width = container.clientWidth - 40; // Account for padding
+      canvas.width = container.clientWidth - 40;
       canvas.height = container.clientHeight - 40;
+      
+      // Redraw history after resize
+      if (history.length > 0) {
+        redrawCanvas(history.slice(0, historyIndex + 1));
+      }
     };
     
     resizeCanvas();
@@ -32,15 +38,15 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     if (!socket) return;
 
     // Receive drawing history when connecting
-    socket.on('drawing-history', (history) => {
-      redrawCanvas(history);
-      setHistory(history);
-      setHistoryIndex(history.length - 1);
+    socket.on('drawing-history', (historyData) => {
+      redrawCanvas(historyData);
+      setHistory(historyData);
+      setHistoryIndex(historyData.length - 1);
     });
 
     // Receive drawing events from other users
     socket.on('drawing', (data) => {
-      drawOnCanvas(data);
+      drawOnCanvas(data, false);
       setHistory(prev => [...prev, data]);
       setHistoryIndex(prev => prev + 1);
     });
@@ -60,53 +66,51 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
   }, [socket, context]);
 
   // Draw on canvas based on received data
-  const drawOnCanvas = (data) => {
+  const drawOnCanvas = (data, isLocal = true) => {
     if (!context) return;
     
-    const { tool, startX, startY, endX, endY, color, brushSize } = data;
+    const { tool, points, color, brushSize } = data;
     
-    context.strokeStyle = color;
+    context.strokeStyle = tool === 'eraser' ? '#FFFFFF' : color;
     context.lineWidth = brushSize;
     context.lineCap = 'round';
+    context.lineJoin = 'round';
     
-    switch (tool) {
-      case 'pencil':
-        context.beginPath();
-        context.moveTo(startX, startY);
-        context.lineTo(endX, endY);
-        context.stroke();
-        break;
-      case 'eraser':
+    if (tool === 'pencil' || tool === 'eraser') {
+      if (tool === 'eraser') {
         context.save();
         context.globalCompositeOperation = 'destination-out';
-        context.beginPath();
-        context.moveTo(startX, startY);
-        context.lineTo(endX, endY);
-        context.stroke();
+      }
+      
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+      
+      for (let i = 1; i < points.length; i++) {
+        context.lineTo(points[i].x, points[i].y);
+      }
+      
+      context.stroke();
+      
+      if (tool === 'eraser') {
         context.restore();
-        break;
-      case 'line':
-        context.beginPath();
-        context.moveTo(startX, startY);
-        context.lineTo(endX, endY);
-        context.stroke();
-        break;
-      case 'rectangle':
-        context.beginPath();
-        context.rect(startX, startY, endX - startX, endY - startY);
-        context.stroke();
-        break;
-      case 'oval':
-        context.beginPath();
-        const radiusX = Math.abs(endX - startX) / 2;
-        const radiusY = Math.abs(endY - startY) / 2;
-        const centerX = startX + (endX - startX) / 2;
-        const centerY = startY + (endY - startY) / 2;
-        context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-        context.stroke();
-        break;
-      default:
-        break;
+      }
+    } else if (tool === 'line') {
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+      context.lineTo(points[1].x, points[1].y);
+      context.stroke();
+    } else if (tool === 'rectangle') {
+      context.beginPath();
+      context.rect(points[0].x, points[0].y, points[1].x - points[0].x, points[1].y - points[0].y);
+      context.stroke();
+    } else if (tool === 'oval') {
+      context.beginPath();
+      const radiusX = Math.abs(points[1].x - points[0].x) / 2;
+      const radiusY = Math.abs(points[1].y - points[0].y) / 2;
+      const centerX = points[0].x + (points[1].x - points[0].x) / 2;
+      const centerY = points[0].y + (points[1].y - points[0].y) / 2;
+      context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+      context.stroke();
     }
   };
 
@@ -119,7 +123,7 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     
     // Redraw all history items
     historyData.forEach(data => {
-      drawOnCanvas(data);
+      drawOnCanvas(data, false);
     });
   };
 
@@ -129,84 +133,91 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
   };
 
-  // Handle mouse/touch events
+  // Handle mouse events
   const startDrawing = (e) => {
-    e.preventDefault();
-    const { offsetX, offsetY } = getCoordinates(e);
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
     
     setIsDrawing(true);
-    setStartPos({ x: offsetX, y: offsetY });
+    setStartPos({ x, y });
+    setCurrentPath([{ x, y }]);
   };
 
   const draw = (e) => {
-    e.preventDefault();
     if (!isDrawing || !context) return;
     
-    const { offsetX, offsetY } = getCoordinates(e);
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
     
-    // For immediate feedback
+    // Add point to current path
+    setCurrentPath(prev => [...prev, { x, y }]);
+    
+    // For immediate feedback - clear and redraw everything
     context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     redrawCanvas(history.slice(0, historyIndex + 1));
     
-    // Draw current shape
+    // Draw current temporary shape
     context.strokeStyle = tool === 'eraser' ? '#FFFFFF' : color;
     context.lineWidth = brushSize;
     context.lineCap = 'round';
+    context.lineJoin = 'round';
     
-    switch (tool) {
-      case 'pencil':
-        context.beginPath();
-        context.moveTo(startPos.x, startPos.y);
-        context.lineTo(offsetX, offsetY);
-        context.stroke();
-        break;
-      case 'eraser':
+    if (tool === 'pencil' || tool === 'eraser') {
+      if (tool === 'eraser') {
         context.save();
         context.globalCompositeOperation = 'destination-out';
-        context.beginPath();
-        context.moveTo(startPos.x, startPos.y);
-        context.lineTo(offsetX, offsetY);
-        context.stroke();
+      }
+      
+      context.beginPath();
+      context.moveTo(currentPath[0].x, currentPath[0].y);
+      
+      for (let i = 1; i < currentPath.length; i++) {
+        context.lineTo(currentPath[i].x, currentPath[i].y);
+      }
+      
+      context.stroke();
+      
+      if (tool === 'eraser') {
         context.restore();
-        break;
-      case 'line':
-        context.beginPath();
-        context.moveTo(startPos.x, startPos.y);
-        context.lineTo(offsetX, offsetY);
-        context.stroke();
-        break;
-      case 'rectangle':
-        context.beginPath();
-        context.rect(startPos.x, startPos.y, offsetX - startPos.x, offsetY - startPos.y);
-        context.stroke();
-        break;
-      case 'oval':
-        context.beginPath();
-        const radiusX = Math.abs(offsetX - startPos.x) / 2;
-        const radiusY = Math.abs(offsetY - startPos.y) / 2;
-        const centerX = startPos.x + (offsetX - startPos.x) / 2;
-        const centerY = startPos.y + (offsetY - startPos.y) / 2;
-        context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-        context.stroke();
-        break;
-      default:
-        break;
+      }
+    } else if (tool === 'line') {
+      context.beginPath();
+      context.moveTo(startPos.x, startPos.y);
+      context.lineTo(x, y);
+      context.stroke();
+    } else if (tool === 'rectangle') {
+      context.beginPath();
+      context.rect(startPos.x, startPos.y, x - startPos.x, y - startPos.y);
+      context.stroke();
+    } else if (tool === 'oval') {
+      context.beginPath();
+      const radiusX = Math.abs(x - startPos.x) / 2;
+      const radiusY = Math.abs(y - startPos.y) / 2;
+      const centerX = startPos.x + (x - startPos.x) / 2;
+      const centerY = startPos.y + (y - startPos.y) / 2;
+      context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+      context.stroke();
     }
   };
 
   const stopDrawing = (e) => {
-    e.preventDefault();
     if (!isDrawing) return;
     
-    const { offsetX, offsetY } = getCoordinates(e);
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Add final point
+    const finalPath = tool === 'pencil' || tool === 'eraser' 
+      ? [...currentPath, { x, y }] 
+      : [startPos, { x, y }];
     
     // Create drawing data
     const drawingData = {
       tool,
-      startX: startPos.x,
-      startY: startPos.y,
-      endX: offsetX,
-      endY: offsetY,
+      points: finalPath,
       color: tool === 'eraser' ? '#FFFFFF' : color,
       brushSize
     };
@@ -223,38 +234,23 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
     }
     
     setIsDrawing(false);
-  };
-
-  // Get coordinates from mouse or touch event
-  const getCoordinates = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    if (e.touches) {
-      return {
-        offsetX: e.touches[0].clientX - rect.left,
-        offsetY: e.touches[0].clientY - rect.top
-      };
-    } else {
-      return {
-        offsetX: e.clientX - rect.left,
-        offsetY: e.clientY - rect.top
-      };
-    }
+    setCurrentPath([]);
   };
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
     undo: () => {
       if (historyIndex >= 0) {
-        setHistoryIndex(prev => prev - 1);
-        redrawCanvas(history.slice(0, historyIndex));
+        const newIndex = historyIndex - 1;
+        setHistoryIndex(newIndex);
+        redrawCanvas(history.slice(0, newIndex + 1));
       }
     },
     redo: () => {
       if (historyIndex < history.length - 1) {
-        setHistoryIndex(prev => prev + 1);
-        redrawCanvas(history.slice(0, historyIndex + 1));
+        const newIndex = historyIndex + 1;
+        setHistoryIndex(newIndex);
+        redrawCanvas(history.slice(0, newIndex + 1));
       }
     },
     clear: () => {
@@ -282,9 +278,6 @@ const Canvas = forwardRef(({ tool, color, brushSize, socket }, ref) => {
       onMouseMove={draw}
       onMouseUp={stopDrawing}
       onMouseLeave={stopDrawing}
-      onTouchStart={startDrawing}
-      onTouchMove={draw}
-      onTouchEnd={stopDrawing}
       className="border border-gray-300 rounded-lg cursor-crosshair w-full h-full"
     />
   );
